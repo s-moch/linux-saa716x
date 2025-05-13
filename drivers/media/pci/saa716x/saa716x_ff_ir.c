@@ -187,6 +187,6 @@ void saa716x_ir_exit(struct saa716x_ff_dev *saa716x_ff)
 	struct infrared *ir = &saa716x_ff->ir;
 
 	cancel_work_sync(&ir->bh_work);
-	del_timer_sync(&ir->keyup_timer);
+	timer_delete_sync(&ir->keyup_timer);
 	input_unregister_device(ir->input_dev);
 }
