@@ -17,7 +17,7 @@
 /* key-up timer */
 static void ir_emit_keyup(struct timer_list *t)
 {
-	struct infrared *ir = from_timer(ir, t, keyup_timer);
+	struct infrared *ir = timer_container_of(ir, t, keyup_timer);
 
 	if (!ir || !ir->key_pressed)
 		return;
