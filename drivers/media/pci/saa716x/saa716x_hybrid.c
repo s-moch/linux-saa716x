@@ -25,7 +25,7 @@ static int saa716x_hybrid_pci_probe(struct pci_dev *pdev,
 	struct saa716x_dev *saa716x;
 	int err = 0;
 
-	saa716x = kzalloc(sizeof(struct saa716x_dev), GFP_KERNEL);
+	saa716x = kzalloc_obj(*saa716x);
 	if (saa716x == NULL) {
 		err = -ENOMEM;
 		goto fail0;
