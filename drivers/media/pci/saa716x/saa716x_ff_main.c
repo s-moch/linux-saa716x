@@ -965,7 +965,7 @@ static int saa716x_ff_pci_probe(struct pci_dev *pdev,
 	u32 value;
 	unsigned long timeout;
 
-	saa716x_ff = kzalloc(sizeof(struct saa716x_ff_dev), GFP_KERNEL);
+	saa716x_ff = kzalloc_obj(*saa716x_ff);
 	if (saa716x_ff == NULL) {
 		err = -ENOMEM;
 		goto fail0;
