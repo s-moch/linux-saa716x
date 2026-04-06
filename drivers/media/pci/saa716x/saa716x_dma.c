@@ -105,13 +105,14 @@ static int saa716x_dmabuf_sgalloc(struct saa716x_dmabuf *dmabuf, int size)
 		pages = size / SAA716x_PAGE_SIZE;
 
 	/* Allocate memory for SG list */
-	dmabuf->sg_list = kcalloc(pages, sizeof(struct scatterlist),
-				  GFP_KERNEL);
-	if (dmabuf->sg_list == NULL)
+	list = kmalloc_objs(*list, pages);
+	if (list == NULL)
 		return -ENOMEM;
 
 	pci_dbg(saa716x->pdev, "Initializing SG table");
-	sg_init_table(dmabuf->sg_list, pages);
+	sg_init_table(list, pages);
+	dmabuf->sg_list = list;
+	dmabuf->list_len = pages; /* scatterlist length */
 
 	/* allocate memory, unaligned */
 	dmabuf->mem_virt_noalign = vzalloc((pages + 1) * SAA716x_PAGE_SIZE);
@@ -121,9 +122,6 @@ static int saa716x_dmabuf_sgalloc(struct saa716x_dmabuf *dmabuf, int size)
 	/* align memory to page */
 	dmabuf->mem_virt =
 		(void *) PAGE_ALIGN(((unsigned long) dmabuf->mem_virt_noalign));
-
-	dmabuf->list_len = pages; /* scatterlist length */
-	list = dmabuf->sg_list;
 
 	pci_dbg(saa716x->pdev, "Allocating SG pages");
 	for (i = 0; i < pages; i++) {
