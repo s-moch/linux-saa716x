@@ -100,45 +100,6 @@ static int sti7109_do_raw_cmd(struct sti7109_dev *sti7109)
 	return 0;
 }
 
-int sti7109_raw_cmd(struct sti7109_dev *sti7109, osd_raw_cmd_t *cmd)
-{
-	struct saa716x_ff_dev *saa716x_ff =
-			container_of(sti7109, struct saa716x_ff_dev, sti7109);
-	struct saa716x_dev *saa716x = &saa716x_ff->saa716x;
-	int err;
-
-	if (cmd->cmd_len > SIZE_CMD_DATA) {
-		pci_err(saa716x->pdev, "command too long");
-		return -EFAULT;
-	}
-
-	mutex_lock(&sti7109->cmd_lock);
-
-	err = -EFAULT;
-	if (copy_from_user(sti7109->cmd_data, (void __user *)cmd->cmd_data,
-			   cmd->cmd_len))
-		goto out;
-
-	sti7109->cmd_len = cmd->cmd_len;
-	sti7109->result_max_len = cmd->result_len;
-
-	err = sti7109_do_raw_cmd(sti7109);
-	if (err)
-		goto out;
-
-	cmd->result_len = sti7109->result_len;
-	if (sti7109->result_len > 0) {
-		if (copy_to_user((void __user *)cmd->result_data,
-				 sti7109->result_data,
-				 sti7109->result_len))
-			err = -EFAULT;
-	}
-
-out:
-	mutex_unlock(&sti7109->cmd_lock);
-	return err;
-}
-
 static int sti7109_do_raw_osd_cmd(struct sti7109_dev *sti7109)
 {
 	struct saa716x_ff_dev *saa716x_ff =
@@ -198,42 +159,70 @@ static int sti7109_do_raw_osd_cmd(struct sti7109_dev *sti7109)
 	return 0;
 }
 
-int sti7109_raw_osd_cmd(struct sti7109_dev *sti7109, osd_raw_cmd_t *cmd)
+int sti7109_raw_cmd(struct sti7109_dev *sti7109, osd_raw_cmd_t __user *user_cmdp)
 {
 	struct saa716x_ff_dev *saa716x_ff =
 			container_of(sti7109, struct saa716x_ff_dev, sti7109);
 	struct saa716x_dev *saa716x = &saa716x_ff->saa716x;
+	osd_raw_cmd_t raw_cmd;
+	bool is_osd_cmd;
+	u8 hdr[4];
 	int err;
 
-	if (cmd->cmd_len > SIZE_OSD_CMD_DATA) {
+	err = copy_from_user(&raw_cmd, user_cmdp, sizeof(raw_cmd));
+	if (err)
+		return err;
+
+	err = copy_from_user(hdr, (void __user *)raw_cmd.cmd_data, 4);
+	if (err)
+		return err;
+
+	is_osd_cmd = (hdr[3] == 4);
+
+	if (raw_cmd.cmd_len > (is_osd_cmd ? SIZE_OSD_CMD_DATA : SIZE_CMD_DATA)) {
 		pci_err(saa716x->pdev, "command too long");
 		return -EFAULT;
 	}
 
-	mutex_lock(&sti7109->osd_cmd_lock);
-
-	err = -EFAULT;
-	if (copy_from_user(sti7109->osd_cmd_data, (void __user *)cmd->cmd_data,
-			   cmd->cmd_len))
-		goto out;
-
-	sti7109->osd_cmd_len = cmd->cmd_len;
-	sti7109->osd_result_max_len = cmd->result_len;
-
-	err = sti7109_do_raw_osd_cmd(sti7109);
-	if (err)
-		goto out;
-
-	cmd->result_len = sti7109->osd_result_len;
-	if (sti7109->osd_result_len > 0) {
-		if (copy_to_user((void __user *)cmd->result_data,
-				 sti7109->osd_result_data,
-				 sti7109->osd_result_len))
-			err = -EFAULT;
+	if (is_osd_cmd) {
+		/* raw OSD command */
+		mutex_lock(&sti7109->osd_cmd_lock);
+		err = copy_from_user(sti7109->osd_cmd_data,
+				     (void __user *)raw_cmd.cmd_data,
+				     raw_cmd.cmd_len);
+		if (!err) {
+			sti7109->osd_cmd_len = raw_cmd.cmd_len;
+			sti7109->osd_result_max_len = raw_cmd.result_len;
+			err = sti7109_do_raw_osd_cmd(sti7109);
+			raw_cmd.result_len = sti7109->osd_result_len;
+			if (!err && raw_cmd.result_len > 0) {
+				err = copy_to_user((void __user *)raw_cmd.result_data,
+						   sti7109->osd_result_data,
+						   sti7109->osd_result_len);
+			}
+		}
+		mutex_unlock(&sti7109->osd_cmd_lock);
+	} else {
+		/* raw command */
+		mutex_lock(&sti7109->cmd_lock);
+		err = copy_from_user(sti7109->cmd_data,
+				     (void __user *)raw_cmd.cmd_data,
+				     raw_cmd.cmd_len);
+		if (!err) {
+			sti7109->cmd_len = raw_cmd.cmd_len;
+			sti7109->result_max_len = raw_cmd.result_len;
+			err = sti7109_do_raw_cmd(sti7109);
+			raw_cmd.result_len = sti7109->result_len;
+			if (!err && raw_cmd.result_len > 0) {
+				err = copy_to_user((void __user *)raw_cmd.result_data,
+						   sti7109->result_data,
+						   sti7109->result_len);
+			}
+		}
+		mutex_unlock(&sti7109->cmd_lock);
 	}
-
-out:
-	mutex_unlock(&sti7109->osd_cmd_lock);
+	if (!err)
+		err = put_user(raw_cmd.result_len, &user_cmdp->result_len);
 	return err;
 }
 
@@ -362,31 +351,32 @@ static int sti7109_do_raw_data(struct sti7109_dev *sti7109,
 	return 0;
 }
 
-int sti7109_raw_data(struct sti7109_dev *sti7109, osd_raw_data_t *data)
+int sti7109_raw_data(struct sti7109_dev *sti7109, osd_raw_data_t __user *user_datap)
 {
 	struct saa716x_ff_dev *saa716x_ff =
 			container_of(sti7109, struct saa716x_ff_dev, sti7109);
 	struct saa716x_dev *saa716x = &saa716x_ff->saa716x;
+	osd_raw_data_t raw_data;
 	int err;
 
-	if (data->data_length > MAX_DATA_LEN) {
+	err = copy_from_user(&raw_data, user_datap, sizeof(raw_data));
+	if (err)
+		return err;
+	if (raw_data.data_length > MAX_DATA_LEN) {
 		pci_err(saa716x->pdev, "data too big");
 		return -EFAULT;
 	}
 
 	mutex_lock(&sti7109->data_lock);
 
-	err = -EFAULT;
-	if (copy_from_user(sti7109->data_buffer,
-			   (void __user *)data->data_buffer,
-			   data->data_length))
-		goto out;
+	err = copy_from_user(sti7109->data_buffer,
+			     (void __user *)raw_data.data_buffer,
+			     raw_data.data_length);
+	if (!err)
+		err = sti7109_do_raw_data(sti7109, &raw_data);
+	if (!err)
+		err = copy_to_user(user_datap, &raw_data, sizeof(raw_data));
 
-	err = sti7109_do_raw_data(sti7109, data);
-	if (err)
-		goto out;
-
-out:
 	mutex_unlock(&sti7109->data_lock);
 	return err;
 }
