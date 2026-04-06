@@ -242,116 +242,21 @@ static int saa716x_ff_st7109_init(struct saa716x_ff_dev *saa716x_ff)
 	return 0;
 }
 
-static int saa716x_usercopy(struct dvb_device *dvbdev,
-			    unsigned int cmd, unsigned long arg,
-			    int (*func)(struct dvb_device *dvbdev,
-			    unsigned int cmd, void *arg))
-{
-	char    sbuf[128];
-	void    *mbuf = NULL;
-	void    *parg = NULL;
-	int     err  = -EINVAL;
-
-	/*  Copy arguments into temp kernel buffer  */
-	switch (_IOC_DIR(cmd)) {
-	case _IOC_NONE:
-		/*
-		 * For this command, the pointer is actually an integer
-		 * argument.
-		 */
-		parg = (void *) arg;
-		break;
-	case _IOC_READ: /* some v4l ioctls are marked wrong ... */
-	case _IOC_WRITE:
-	case (_IOC_WRITE | _IOC_READ):
-		if (_IOC_SIZE(cmd) <= sizeof(sbuf)) {
-			parg = sbuf;
-		} else {
-			/* too big to allocate from stack */
-			mbuf = kmalloc(_IOC_SIZE(cmd), GFP_KERNEL);
-			if (!mbuf)
-				return -ENOMEM;
-			parg = mbuf;
-		}
-
-		err = -EFAULT;
-		if (copy_from_user(parg, (void __user *)arg, _IOC_SIZE(cmd)))
-			goto out;
-		break;
-	}
-
-	/* call driver */
-	err = func(dvbdev, cmd, parg);
-	if (err == -ENOIOCTLCMD)
-		err = -EINVAL;
-
-	if (err < 0)
-		goto out;
-
-	/*  Copy results into user buffer  */
-	switch (_IOC_DIR(cmd)) {
-	case _IOC_READ:
-	case (_IOC_WRITE | _IOC_READ):
-		if (copy_to_user((void __user *)arg, parg, _IOC_SIZE(cmd)))
-			err = -EFAULT;
-		break;
-	}
-
-out:
-	kfree(mbuf);
-	return err;
-}
-
 static long dvb_osd_ioctl(struct file *file, unsigned int cmd,
 			  unsigned long arg)
 {
 	struct dvb_device *dvbdev = file->private_data;
-	struct sti7109_dev *sti7109 = dvbdev->priv;
-	int err = -EINVAL;
 
 	if (!dvbdev)
 		return -ENODEV;
 
-	if (cmd == OSD_RAW_CMD) {
-		osd_raw_cmd_t raw_cmd;
-		u8 hdr[4];
+	if (cmd == OSD_RAW_CMD)
+		return sti7109_raw_cmd(dvbdev->priv, (osd_raw_cmd_t __user *)arg);
 
-		err = -EFAULT;
-		if (copy_from_user(&raw_cmd, (void __user *)arg,
-				   _IOC_SIZE(cmd)))
-			goto out;
+	if (cmd == OSD_RAW_DATA)
+		return sti7109_raw_data(dvbdev->priv, (osd_raw_data_t __user *)arg);
 
-		if (copy_from_user(hdr, (void __user *)raw_cmd.cmd_data, 4))
-			goto out;
-
-		if (hdr[3] == 4)
-			err = sti7109_raw_osd_cmd(sti7109, &raw_cmd);
-		else
-			err = sti7109_raw_cmd(sti7109, &raw_cmd);
-
-		if (err)
-			goto out;
-
-		if (copy_to_user((void __user *)arg, &raw_cmd, _IOC_SIZE(cmd)))
-			err = -EFAULT;
-	} else if (cmd == OSD_RAW_DATA) {
-		osd_raw_data_t raw_data;
-
-		err = -EFAULT;
-		if (copy_from_user(&raw_data, (void __user *)arg,
-				   _IOC_SIZE(cmd)))
-			goto out;
-
-		err = sti7109_raw_data(sti7109, &raw_data);
-		if (err)
-			goto out;
-
-		if (copy_to_user((void __user *)arg, &raw_data, _IOC_SIZE(cmd)))
-			err = -EFAULT;
-	}
-
-out:
-	return err;
+	return -ENODEV;
 }
 
 static const struct file_operations dvb_osd_fops = {
@@ -391,26 +296,6 @@ static int saa716x_ff_osd_init(struct saa716x_ff_dev *saa716x_ff)
 	return 0;
 }
 
-static int do_dvb_audio_ioctl(struct dvb_device *dvbdev,
-			      unsigned int cmd, void *parg)
-{
-	struct sti7109_dev *sti7109	= dvbdev->priv;
-	//struct saa716x_dev *saa716x	= sti7109->dev;
-	int ret = 0;
-
-	switch (cmd) {
-	case AUDIO_GET_PTS:
-	{
-		*(u64 *)parg = sti7109->audio_pts;
-		break;
-	}
-	default:
-		ret = -ENOIOCTLCMD;
-		break;
-	}
-	return ret;
-}
-
 static long dvb_audio_ioctl(struct file *file, unsigned int cmd,
 			    unsigned long arg)
 {
@@ -419,7 +304,13 @@ static long dvb_audio_ioctl(struct file *file, unsigned int cmd,
 	if (!dvbdev)
 		return -ENODEV;
 
-	return saa716x_usercopy(dvbdev, cmd, arg, do_dvb_audio_ioctl);
+	if (cmd == AUDIO_GET_PTS) {
+		struct sti7109_dev *sti7109 = dvbdev->priv;
+
+		return put_user(sti7109->audio_pts, (u64 *)arg);
+	}
+
+	return -ENOIOCTLCMD;
 }
 
 static const struct file_operations dvb_audio_fops = {
@@ -822,7 +713,7 @@ static unsigned int dvb_video_poll(struct file *file, poll_table *wait)
 }
 
 static int do_dvb_video_ioctl(struct dvb_device *dvbdev,
-			      unsigned int cmd, void *parg)
+			      unsigned int cmd, unsigned long arg)
 {
 	struct sti7109_dev *sti7109  = dvbdev->priv;
 	struct saa716x_ff_dev *saa716x_ff =
@@ -835,7 +726,7 @@ static int do_dvb_video_ioctl(struct dvb_device *dvbdev,
 	{
 		video_stream_source_t stream_source;
 
-		stream_source = (video_stream_source_t) parg;
+		stream_source = (video_stream_source_t) arg;
 		if (stream_source == VIDEO_SOURCE_DEMUX) {
 			/* stop and reset FIFO 1 */
 			spin_lock(&sti7109->tsout.lock);
@@ -868,13 +759,17 @@ static int do_dvb_video_ioctl(struct dvb_device *dvbdev,
 	}
 	case VIDEO_GET_PTS:
 	{
-		*(u64 *)parg = sti7109->video_pts;
+		ret = put_user(sti7109->video_pts, (u64 *)arg);
 		break;
 	}
 	case VIDEO_GET_SIZE:
 	{
-		ret = sti7109_cmd_get_video_format(sti7109,
-						   (video_size_t *) parg);
+		video_size_t vs;
+
+		ret = sti7109_cmd_get_video_format(sti7109, &vs);
+		if (ret)
+			break;
+		ret = copy_to_user((video_size_t *)arg, &vs, sizeof(vs));
 		break;
 	}
 	default:
@@ -892,7 +787,7 @@ static long dvb_video_ioctl(struct file *file, unsigned int cmd,
 	if (!dvbdev)
 		return -ENODEV;
 
-	return saa716x_usercopy(dvbdev, cmd, arg, do_dvb_video_ioctl);
+	return do_dvb_video_ioctl(dvbdev, cmd, arg);
 }
 
 static const struct file_operations dvb_video_fops = {
