@@ -5,11 +5,9 @@
 
 extern int sti7109_cmd_init(struct sti7109_dev *sti7109);
 extern int sti7109_raw_cmd(struct sti7109_dev *sti7109,
-			   osd_raw_cmd_t *cmd);
-extern int sti7109_raw_osd_cmd(struct sti7109_dev *sti7109,
-			       osd_raw_cmd_t *cmd);
+			   osd_raw_cmd_t __user *user_cmdp);
 extern int sti7109_raw_data(struct sti7109_dev *sti7109,
-			    osd_raw_data_t *data);
+			    osd_raw_data_t __user *user_datap);
 extern int sti7109_cmd_get_fw_version(struct sti7109_dev *sti7109,
 				      u32 *fw_version);
 extern int sti7109_cmd_get_video_format(struct sti7109_dev *sti7109,
